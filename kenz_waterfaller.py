@@ -140,7 +140,7 @@ def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
     # If at end of observation
     if (start_bin + nbinsextra) > rawdatafile.nspec-1:
         nbinsextra = rawdatafile.nspec-1-start_bin
-
+        
     data = rawdatafile.get_spectra(start_bin, nbinsextra)
 
     # Masking
@@ -195,10 +195,9 @@ def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
 
     return data, data_noscale, nbinsextra, nbins, start
 
-def plot_waterfall(data,data_noscale, start, duration,centre_MJD,dm,sigma, width, tsamp,favg,integrate_spec=False, show_cb=False,
-                   cmap_str="gist_yarg", sweep_dms=[], sweep_posns=[], interactive=True):
-
-
+def plot_waterfall(data,data_noscale, start, duration,centre_MJD,dm,sigma, width, tsamp,tavg,fres,favg,integrate_spec=False, show_cb=False,cmap_str="gist_yarg", sweep_dms=[], sweep_posns=[], interactive=True):
+    
+    
     # Set up axes
     if interactive:
         fig = plt.figure(figsize=[12,7])
@@ -207,6 +206,10 @@ def plot_waterfall(data,data_noscale, start, duration,centre_MJD,dm,sigma, width
     fig.text(0.1,0.85, "Centre MJD = %s"%centre_MJD)
     fig.text(0.1,0.8,"Significance = %s sigma"%sigma)
     fig.text(0.1,0.75,"Boxcar width = %s seconds"%(tsamp*width))
+   
+    fig.text(0.1,0.25, "Plotting resolution")
+    fig.text(0.1,0.2,"Time resolution %s milliseconds"%(tsamp*tavg*1e3))
+    fig.text(0.1,0.15,"Frequency resolution %s MHz"%(fres*favg))
     im_width = 0.3 if integrate_spec else 0.4
     im_height = 0.8
     ax_im = plt.axes((0.45, 0.15, im_width, im_height-0.2))
@@ -257,7 +260,7 @@ def plot_waterfall(data,data_noscale, start, duration,centre_MJD,dm,sigma, width
         sweepstart = data.dt*data.numspectra*sweep_posn+data.starttime
         sty = SWEEP_STYLES[ii%len(SWEEP_STYLES)]
         ax_im.plot(delays+sweepstart, data.freqs, sty, lw=4, alpha=0.5)
-
+        
     # Dressing it up
     ax_im.xaxis.get_major_formatter().set_useOffset(False)
     ax_im.set_xlabel("Time")
@@ -308,6 +311,8 @@ def main():
         rawdatafile = filterbank.FilterbankFile(fn)
         scan_start=rawdatafile.tstart
         tsamp=rawdatafile.tsamp
+        df = rawdatafile.freqs[1] - rawdatafile.freqs[0]
+        fres=df/int(rawdatafile.nchan+1)
     elif fn.endswith(".fits"):
         # PSRFITS file
         filetype = "psrfits"
@@ -329,7 +334,7 @@ def main():
 
     centre_MJD=scan_start+((options.start + (0.5*options.duration))/(24.*3600.))
     plot_waterfall(data, data_noscale, start, options.duration, centre_MJD, options.dm,\
-                   options.sigma,options.width,tsamp, options.favg, integrate_spec=options.integrate_spec, show_cb=options.show_cb,
+                   options.sigma,options.width,tsamp,options.tavg,fres, options.favg, integrate_spec=options.integrate_spec, show_cb=options.show_cb,
                    cmap_str=options.cmap, sweep_dms=options.sweep_dms,
                    sweep_posns=options.sweep_posns)
 
