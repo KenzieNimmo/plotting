@@ -1,4 +1,5 @@
 import filterbank
+filterbank.__file__
 import numpy as np
 import matplotlib.pyplot as plt
 import optparse
@@ -7,7 +8,10 @@ import matplotlib.cm
 import matplotlib.gridspec as gridspec
 import spectra
 from numpy import array
-
+import psrfits
+import psr_utils
+import sys
+import os.path
 
 def get_mask(rfimask, startsamp, N):
     """Return an array of boolean values to act as a mask
@@ -33,9 +37,20 @@ def get_mask(rfimask, startsamp, N):
         mask[blocknums==blocknum] = blockmask
     return mask.T
 
-def maskfile(maskfn, data, start_bin, nbinsextra):
+def maskfile(maskfn, data, start_bin, nbinsextra, extra_begin_chan=None, extra_end_chan=None):
     rfimask = rfifind.rfifind(maskfn)
     mask = get_mask(rfimask, start_bin, nbinsextra)[::-1]
+    num_chan = mask.shape[0]
+    if extra_begin_chan!=None and extra_end_chan!=None:
+        if len(extra_begin_chan) != len(extra_end_chan):
+            print("length of extra mask begin channels and extra mask end channels need to be the same")
+            sys.exit()
+        else:
+            for ms in range(len(extra_begin_chan)):
+                end=num_chan-extra_begin_chan[ms]
+                begin = num_chan-extra_end_chan[ms]
+                mask[begin:end+1,:]=True
+
     masked_chans = mask.all(axis=1)
     # Mask data
     data = data.masked(mask, maskval='median-mid80')
@@ -43,7 +58,7 @@ def maskfile(maskfn, data, start_bin, nbinsextra):
     #datacopy = copy.deepcopy(data)
     return data, masked_chans
 
-def waterfall(filename,start,duration,dm=0,mask=False,maskfn=None,favg=1,tavg=1,scaleindep=False):
+def waterfall(filename,start,duration,dm=0,mask=False,maskfn=None,favg=1,tavg=1,scaleindep=False,extra_begin_chan=None,extra_end_chan=None):
     """
 
     """
@@ -57,6 +72,15 @@ def waterfall(filename,start,duration,dm=0,mask=False,maskfn=None,favg=1,tavg=1,
         fres=df/int(nchans+1)
         scan_start=rawdatafile.tstart
 
+    if filename.endswith('.fits'):
+        rawdatafile = psrfits.PsrfitsFile(filename)
+        tsamp=rawdatafile.tsamp
+        nchans=rawdatafile.nchan
+        freqs=rawdatafile.frequencies
+        total_N=rawdatafile.specinfo.N
+        df =  np.abs(freqs[-1] - freqs[0])
+        fres = df/int(nchans+1)
+        scan_start=rawdatafile.header['STT_IMJD']+(rawdatafile.header['STT_SMJD']+rawdatafile.header['STT_OFFS'])/(24.*3600.)
 
     start_bin=np.round(start/tsamp).astype('int')    #convert begin time to bins
     dmdelay_coeff = 4.15e3 * np.abs(1./freqs[0]**2 - 1./freqs[-1]**2)
@@ -75,7 +99,7 @@ def waterfall(filename,start,duration,dm=0,mask=False,maskfn=None,favg=1,tavg=1,
 
     #masking
     if mask and maskfn:
-        data, masked_chans = maskfile(maskfn, data, start_bin, nbinsextra)
+        data, masked_chans = maskfile(maskfn, data, start_bin, nbinsextra,extra_begin_chan=extra_begin_chan, extra_end_chan=extra_end_chan)
     else:
         masked_chans = np.zeros(nchans,dtype=bool)
 
@@ -95,7 +119,7 @@ def waterfall(filename,start,duration,dm=0,mask=False,maskfn=None,favg=1,tavg=1,
     return data, data_noscale, nbinsextra, nbins, start,tsamp,fres,scan_start
 
 def plot_waterfall(data,data_noscale,start,duration,centre_MJD,dm,sigma,width,tsamp,\
-    fres,tavg=1,favg=1,cmap_str="gist_yarg",integrate_spec=False,sweep_dms=[], sweep_posns=[], interactive=True):
+                   fres,tavg=1,favg=1,cmap_str="gist_yarg",integrate_spec=False,sweep_dms=[], sweep_posns=[],save_plot=False,interactive=True):
 
     # Set up axes
     if interactive:
@@ -149,14 +173,20 @@ ue that divides the total number of channels."%nchan_tot)
         else:
             sweep_posn = sweep_posns[ii]
         sweepstart = data.dt*data.numspectra*sweep_posn+data.starttime
-        sty = SWEEP_STYLES[ii%len(SWEEP_STYLES)]
-        ax_im.plot(delays+sweepstart, data.freqs, sty, lw=4, alpha=0.5)
+        #sty = SWEEP_STYLES[ii%len(SWEEP_STYLES)]
+        ax_im.plot(delays+sweepstart, data.freqs, lw=4, alpha=0.5)
 
     # Dressing it up
     ax_im.xaxis.get_major_formatter().set_useOffset(False)
     ax_im.set_xlabel("Time")
     ax_im.set_ylabel("Frequency (MHz)")
     ax_im.set_ylim((data.freqs.min(), data.freqs.max()))
+    
+    
+    axsec = ax_im.twinx()
+
+    axsec.set_yticks(np.round(np.linspace(0,data.data[..., :nbinlim].shape[0],10))*favg)
+    axsec.set_ylabel('Bins')
 
     # Plot Time series
 
@@ -190,22 +220,30 @@ ue that divides the total number of channels."%nchan_tot)
         fig.canvas.mpl_connect('key_press_event', \
                 lambda ev: (ev.key in ('q','Q') and plt.close(fig)))
 
+    if save_plot==True:
+        fig.savefig('waterfall_%sMJD_DM%s_sigma%s.png'%(centre_MJD,dm,sigma),dpi=300,facecolor='w', edgecolor='w',format='png')
+        plt.close()
+    else:
         plt.show()
+
+
 
 def main():
     filename=args[0]
 
-    data, data_noscale, bins, nbins, start,tsamp,fres, scan_start = waterfall(filename, options.start, \
+    if os.path.isfile('./pulse_cands/waterfall_*MJD_DM%s_sigma%s.png'%(options.dm,options.sigma)) == False:
+ 
+        data, data_noscale, bins, nbins, start,tsamp,fres, scan_start = waterfall(filename, options.start, \
                             options.duration, dm=options.dm,\
                             mask=options.mask, maskfn=options.maskfile, \
                             favg=options.favg,tavg=options.tavg, \
-                            scaleindep=options.scaleindep)
+                            scaleindep=options.scaleindep, extra_begin_chan=options.begin_mask, extra_end_chan = options.end_mask)
 
 
-    centre_MJD=scan_start+((options.start + (0.5*options.duration))/(24.*3600.))
+        centre_MJD=scan_start+((options.start + (0.5*options.duration))/(24.*3600.))
 
-    plot_waterfall(data,data_noscale,start,options.duration,centre_MJD,options.dm,options.sigma,options.width,tsamp,\
-        fres,tavg=options.tavg,favg=options.favg,cmap_str=options.cmap,integrate_spec=options.integrate_spec,sweep_dms=options.sweep_dms, sweep_posns=options.sweep_posns)
+        plot_waterfall(data,data_noscale,start,options.duration,centre_MJD,options.dm,options.sigma,options.width,tsamp,\
+                   fres,tavg=options.tavg,favg=options.favg,cmap_str=options.cmap,integrate_spec=options.integrate_spec,sweep_dms=options.sweep_dms, sweep_posns=options.sweep_posns,save_plot=options.save_plot)
 
 
 
@@ -261,10 +299,19 @@ if __name__=='__main__':
                                 "independently. (Default: Scale using " \
                                 "global maximum.)", \
                         default=False)
+    parser.add_option('--save_plot', dest='save_plot', action='store_true', \
+                        help="If this is set, it saves the waterfall plots " \
+                                "as png. (Default: plot on screen)",\
+                        default=False)
     parser.add_option('--colour-map', dest='cmap', \
                         help="The name of a valid matplotlib colour map." \
                                 "(Default: gist_yarg.)", \
                         default='gist_yarg')
+    parser.add_option('--begin_mask', dest='begin_mask', type='string', \
+                        help="Begin channel for additional masking. If multiple frequency regions list with comma e.g. --begin_mask 60,100,345", default=None)
+    parser.add_option('--end_mask', dest='end_mask', type='string', \
+                        help="End channel for additional masking", default=None)
+                        
     options, args = parser.parse_args()
 
     if not hasattr(options, 'start'):
@@ -273,5 +320,12 @@ if __name__=='__main__':
     if not hasattr(options, 'duration'):
         raise ValueError("Duration (-t/--duration) " \
                             "must be given on command line!")
-    
+    if options.begin_mask!=None:
+        if ',' not in options.begin_mask:
+            options.begin_mask = [int(options.begin_mask)]
+            options.end_mask = [int(options.end_mask)]
+        else:
+            options.begin_mask = [int(x.strip()) for x in options.begin_mask.split(',')]
+            options.end_mask = [int(x.strip()) for x in options.end_mask.split(',')]
+
     main()
